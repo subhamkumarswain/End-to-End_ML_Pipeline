@@ -1,0 +1,45 @@
+{
+  "accuracy": 1.0,
+  "classification_report": {
+    "no": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 3.0
+    },
+    "yes": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 3.0
+    },
+    "accuracy": 1.0,
+    "macro avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 6.0
+    },
+    "weighted avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 6.0
+    }
+  },
+  "target": "passed",
+  "features": [
+    "study_hours",
+    "attendance_pct",
+    "practice_tests",
+    "program"
+  ],
+  "test_rows": 6,
+  "random_state": 42,
+  "tuning_enabled": true,
+  "cv_folds": 5,
+  "cv_accuracy": 0.96,
+  "best_params": {
+    "classifier__C": 0.1
+  }
+}
