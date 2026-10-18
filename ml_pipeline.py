@@ -16,7 +16,6 @@ import joblib
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import GridSearchCV
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -26,7 +25,7 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -88,11 +87,11 @@ def _validate_features(frame: pd.DataFrame, columns: list[str]) -> None:
     missing = [column for column in columns if column not in frame.columns]
     if missing:
         raise ValueError(f"Input data is missing required feature columns: {missing}")
-    empty_columns = [
-        column for column in columns if frame[column].isna().all()
-    ]
+    empty_columns = [column for column in columns if frame[column].isna().all()]
     if empty_columns:
-        raise ValueError(f"Feature columns contain only missing values: {empty_columns}")
+        raise ValueError(
+            f"Feature columns contain only missing values: {empty_columns}"
+        )
     infinite_columns = [
         column
         for column in columns
@@ -100,7 +99,9 @@ def _validate_features(frame: pd.DataFrame, columns: list[str]) -> None:
         and frame[column].isin([math.inf, -math.inf]).any()
     ]
     if infinite_columns:
-        raise ValueError(f"Numeric features contain infinite values: {infinite_columns}")
+        raise ValueError(
+            f"Numeric features contain infinite values: {infinite_columns}"
+        )
 
 
 def _create_model_version(prefix: str = "model") -> str:

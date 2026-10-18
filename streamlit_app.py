@@ -18,7 +18,9 @@ def load_model(model_path: Path) -> dict[str, Any]:
     import joblib
 
     bundle = joblib.load(model_path)
-    if not isinstance(bundle, dict) or not {"model", "features", "target"}.issubset(bundle):
+    if not isinstance(bundle, dict) or not {"model", "features", "target"}.issubset(
+        bundle
+    ):
         raise ValueError(f"Model artifact has an invalid format: {model_path}")
     return bundle
 
@@ -80,7 +82,10 @@ with st.sidebar:
             model_bundle = load_model(Path(selected_model))
             st.session_state["bundle"] = model_bundle
             st.session_state["selected_model"] = selected_model
-            st.success(f"Loaded model: {model_bundle.get('model_name', type(model_bundle['model']).__name__)}")
+            model_name = model_bundle.get(
+                "model_name", type(model_bundle["model"]).__name__
+            )
+            st.success(f"Loaded model: {model_name}")
         except Exception as exc:  # pragma: no cover - UI feedback only
             st.error(f"Could not load model: {exc}")
 
@@ -89,7 +94,13 @@ with st.sidebar:
 
 if "bundle" not in st.session_state:
     try:
-        st.session_state["bundle"] = load_model(Path(selected_model if 'selected_model' not in st.session_state else st.session_state['selected_model']))
+        st.session_state["bundle"] = load_model(
+            Path(
+                selected_model
+                if "selected_model" not in st.session_state
+                else st.session_state["selected_model"]
+            )
+        )
     except Exception:
         st.session_state["bundle"] = None
 
@@ -129,7 +140,18 @@ if metrics_summary:
         st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True)
     else:
         summary = {
-            key: value for key, value in metrics_summary.items() if key in {"accuracy", "precision", "recall", "f1", "cv_accuracy", "best_accuracy", "best_f1"}
+            key: value
+            for key, value in metrics_summary.items()
+            if key
+            in {
+                "accuracy",
+                "precision",
+                "recall",
+                "f1",
+                "cv_accuracy",
+                "best_accuracy",
+                "best_f1",
+            }
         }
         st.json(summary)
 
@@ -138,7 +160,10 @@ with left_column:
     uploaded_file = st.file_uploader("Upload a CSV file for predictions", type=["csv"])
 
 with right_column:
-    st.caption("Prediction output includes a confidence score when the model supports probabilities.")
+    st.caption(
+        "Prediction output includes a confidence score when the model supports "
+        "probabilities."
+    )
 
 if uploaded_file is not None:
     try:

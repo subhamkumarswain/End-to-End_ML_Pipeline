@@ -1,5 +1,7 @@
 # End-to-end tabular classification pipeline
 
+[![CI](https://github.com/subhamkumarswain/End-to-End_ML_Pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/subhamkumarswain/End-to-End_ML_Pipeline/actions/workflows/ci.yml)
+
 This project validates CSV inputs, tunes a scikit-learn classifier with
 cross-validation, evaluates it on a stratified holdout set, saves the fitted
 preprocessing and model together, records experiment metrics, and predicts from
@@ -143,6 +145,10 @@ preview predictions and download the results.
 ## Test
 
 ```powershell
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
+
+GitHub Actions runs the test suite on Python 3.10 through 3.13, checks linting
+and formatting, and verifies that the Docker image builds on pushes and pull
+requests to `main`.

@@ -28,7 +28,9 @@ def _build_prediction_details(
     details: list[dict[str, Any]] = []
     if not hasattr(model, "predict_proba"):
         for index, prediction in enumerate(predictions):
-            details.append({"index": index, "prediction": prediction, "confidence": None})
+            details.append(
+                {"index": index, "prediction": prediction, "confidence": None}
+            )
         return details
 
     features = bundle["features"]
@@ -39,7 +41,9 @@ def _build_prediction_details(
             confidence = float(probabilities[index][class_labels.index(prediction)])
         except (ValueError, TypeError):
             confidence = None
-        details.append({"index": index, "prediction": prediction, "confidence": confidence})
+        details.append(
+            {"index": index, "prediction": prediction, "confidence": confidence}
+        )
     return details
 
 
@@ -85,9 +89,7 @@ def create_app(model_path: Path) -> FastAPI:
         }
 
     @app.post("/predict")
-    def predict_records(
-        payload: PredictionRequest, request: Request
-    ) -> dict[str, Any]:
+    def predict_records(payload: PredictionRequest, request: Request) -> dict[str, Any]:
         try:
             result = predict_frame(
                 request.app.state.model_bundle,

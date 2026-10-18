@@ -80,7 +80,11 @@ class PipelineTests(unittest.TestCase):
             version="v-test",
         )
         self.assertTrue(model_path.exists())
-        self.assertTrue(model_path.with_name(f"{model_path.stem}-v-test{model_path.suffix}").exists())
+        self.assertTrue(
+            model_path.with_name(
+                f"{model_path.stem}-v-test{model_path.suffix}"
+            ).exists()
+        )
         self.assertEqual(len(metrics["comparison"]), 2)
         self.assertIn(metrics["best_model"], {"logistic_regression", "random_forest"})
         self.assertGreaterEqual(metrics["best_f1"], 0.0)
@@ -101,6 +105,7 @@ class PipelineTests(unittest.TestCase):
             "label",
             model_path,
             self.directory / "metrics.json",
+            experiments_path=None,
         )
         incomplete_input = self.directory / "incomplete.csv"
         pd.DataFrame([{"measurement": 10}]).to_csv(incomplete_input, index=False)
@@ -122,7 +127,9 @@ class PipelineTests(unittest.TestCase):
 
     def test_training_rejects_duplicate_csv_headers(self):
         invalid_path = self.directory / "duplicate-headers.csv"
-        invalid_path.write_text("measurement,measurement,label\n1,2,low\n", encoding="utf-8")
+        invalid_path.write_text(
+            "measurement,measurement,label\n1,2,low\n", encoding="utf-8"
+        )
         with self.assertRaisesRegex(ValueError, "duplicate column names"):
             train(
                 invalid_path,
@@ -145,7 +152,9 @@ class PipelineTests(unittest.TestCase):
             metadata_response = client.get("/metadata")
             self.assertEqual(metadata_response.status_code, 200)
             self.assertEqual(metadata_response.json()["target"], "label")
-            self.assertEqual(metadata_response.json()["features"], ["measurement", "group"])
+            self.assertEqual(
+                metadata_response.json()["features"], ["measurement", "group"]
+            )
             response = client.post(
                 "/predict",
                 json={
