@@ -36,6 +36,13 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -v
 
+      - name: Run end-to-end CLI workflow
+        if: matrix.python-version == '3.12'
+        run: |
+          python ml_pipeline.py compare --data data/train.csv --target passed --model artifacts/ci-model.joblib --metrics artifacts/ci-comparison.json --no-experiment-log
+          python ml_pipeline.py predict --model artifacts/ci-model.joblib --data data/predict.csv --output artifacts/ci-predictions.csv
+          python ml_pipeline.py monitor --reference data/train.csv --current data/predict.csv --target passed --report artifacts/ci-drift.json
+
   quality:
     name: Lint and format
     runs-on: ubuntu-latest

@@ -2,10 +2,31 @@
 
 [![CI](https://github.com/subhamkumarswain/End-to-End_ML_Pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/subhamkumarswain/End-to-End_ML_Pipeline/actions/workflows/ci.yml)
 
-This project validates CSV inputs, tunes a scikit-learn classifier with
-cross-validation, evaluates it on a stratified holdout set, saves the fitted
-preprocessing and model together, records experiment metrics, and predicts from
-the CLI or a local HTTP API.
+An end-to-end, reproducible **tabular classification** project: validate CSV
+data, compare and evaluate scikit-learn models, version trained artifacts, and
+serve predictions through a REST API or interactive Streamlit dashboard.
+
+It is intentionally a tabular **classification** pipeline, not a universal
+solution for image, text, time-series, or regression problems. The included
+student-outcome dataset is a small demonstration dataset; its results should not
+be treated as a production model or evidence of real-world predictive quality.
+
+**Workflow:** CSV validation → stratified split → preprocessing and model
+selection → holdout evaluation → versioned model + metrics → prediction,
+tracking, and drift checks.
+
+## Quick start
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+python ml_pipeline.py compare --data .\data\train.csv --target passed --model .\artifacts\demo_model.joblib --metrics .\artifacts\demo_metrics.json --version demo-v1 --no-experiment-log
+python -m streamlit run streamlit_app.py
+```
+
+Then open the Streamlit URL printed in the terminal (usually
+`http://localhost:8501`).
 
 ## Setup
 
@@ -63,10 +84,46 @@ python ml_pipeline.py compare `
   --version v1
 ```
 
-The comparison saves metrics for each candidate model and keeps the one with the
-highest macro F1 score. When a version is supplied, the project also writes a
-versioned artifact copy such as `best_model-v1.joblib`, while preserving the
-latest model at the regular path.
+The comparison selects the model using training-only stratified cross-validation
+macro F1, then reports holdout accuracy, macro precision/recall/F1, per-class
+metrics, and confusion matrices. This avoids choosing a model based on its
+holdout results. It keeps the highest cross-validation macro-F1 model.
+When a version is supplied, it also saves a versioned artifact copy such as
+`best_model-v1.joblib`, while preserving the latest model at the regular path.
+
+## Experiment tracking with MLflow (optional)
+
+Install the optional tracking dependency and enable logging on training or model
+comparison:
+
+```powershell
+python -m pip install -r requirements-mlflow.txt
+python ml_pipeline.py compare --data .\data\train.csv --target passed --mlflow
+mlflow ui
+```
+
+Runs are stored locally in `mlruns/` by default and include parameters, scores,
+the saved model artifact, and the metrics report. Configure a remote MLflow
+tracking server with the `MLFLOW_TRACKING_URI` environment variable. Do not put
+credentials in source control.
+
+## Feature drift monitoring
+
+Compare a new unlabeled CSV with the training feature distribution:
+
+```powershell
+python ml_pipeline.py monitor `
+  --reference .\data\train.csv `
+  --current .\data\predict.csv `
+  --target passed `
+  --report .\artifacts\drift_report.json
+```
+
+The report uses population stability index (PSI) per feature, with separate
+numeric and categorical handling. The default alert threshold is 0.2 and can be
+changed with `--threshold`. Drift is a signal to investigate, not proof that
+model accuracy has degraded; labeled recent outcomes are needed to measure
+performance.
 
 ## Predict
 
@@ -142,6 +199,18 @@ python -m streamlit run streamlit_app.py
 The dashboard loads a saved model, shows metadata, and lets you upload a CSV to
 preview predictions and download the results.
 
+### Publish a live demo
+
+The app is prepared for Streamlit Community Cloud and uses the committed demo
+model at `artifacts/model.joblib`. To publish it, sign in to
+[Streamlit Community Cloud](https://share.streamlit.io/), create a new app from
+this GitHub repository, select the `main` branch and `streamlit_app.py`, then
+deploy. Streamlit will install dependencies from `requirements.txt`. The demo
+accepts uploaded feature CSVs; do not upload sensitive or personal data.
+
+After deployment, replace this line with the public app URL:
+`Live demo: not deployed yet`.
+
 ## Test
 
 ```powershell
@@ -149,6 +218,7 @@ python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
 
-GitHub Actions runs the test suite on Python 3.10 through 3.13, checks linting
-and formatting, and verifies that the Docker image builds on pushes and pull
-requests to `main`.
+For a clean local verification, use a fresh Python 3.10+ environment and follow
+the Quick start. GitHub Actions independently installs the development
+dependencies, runs tests on Python 3.10 through 3.13, checks linting and
+formatting, and builds the Docker image on pushes and pull requests to `main`.

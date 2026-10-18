@@ -1,13 +1,21 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 from fastapi.testclient import TestClient
 
 from api import create_app
-from ml_pipeline import compare_models, predict, train
+from ml_pipeline import (
+    _log_mlflow_run,
+    compare_models,
+    monitor_drift,
+    predict,
+    train,
+)
 
 
 class PipelineTests(unittest.TestCase):
@@ -47,6 +55,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(metrics["features"], ["measurement", "group"])
         self.assertGreaterEqual(metrics["cv_folds"], 2)
         self.assertIn("classifier__C", metrics["best_params"])
+        self.assertIn("confusion_matrix", metrics)
+        self.assertEqual(set(metrics["confusion_matrix"]["labels"]), {"low", "high"})
+        self.assertIn("macro avg", metrics["classification_report"])
         saved_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
         self.assertAlmostEqual(saved_metrics["accuracy"], metrics["accuracy"])
         experiment = json.loads(
@@ -66,6 +77,7 @@ class PipelineTests(unittest.TestCase):
         result = predict(model_path, prediction_input, output_path)
 
         self.assertEqual(result["prediction"].tolist(), ["low", "high"])
+        self.assertEqual(result["group"].tolist(), ["north", "east"])
         self.assertTrue(output_path.exists())
 
     def test_compare_models_picks_best_candidate(self):
@@ -88,6 +100,90 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(metrics["comparison"]), 2)
         self.assertIn(metrics["best_model"], {"logistic_regression", "random_forest"})
         self.assertGreaterEqual(metrics["best_f1"], 0.0)
+        self.assertEqual(metrics["selection_metric"], "cv_f1_macro")
+        self.assertGreaterEqual(metrics["selection_cv_folds"], 2)
+        self.assertIn("best_confusion_matrix", metrics)
+        self.assertIn("best_classification_report", metrics)
+        for candidate in metrics["comparison"]:
+            self.assertIn("cv_f1_macro", candidate)
+            self.assertEqual(
+                set(candidate["confusion_matrix"]["labels"]), {"low", "high"}
+            )
+            self.assertIn("macro avg", candidate["classification_report"])
+
+    def test_monitor_drift_writes_feature_report(self):
+        current_path = self.directory / "current.csv"
+        pd.DataFrame(
+            [
+                {"measurement": 150, "group": "north"},
+                {"measurement": 160, "group": "north"},
+                {"measurement": 170, "group": "south"},
+            ]
+        ).to_csv(current_path, index=False)
+        report_path = self.directory / "drift.json"
+
+        report = monitor_drift(
+            self.data_path, current_path, report_path, target="label"
+        )
+
+        self.assertTrue(report_path.exists())
+        self.assertEqual(report["reference_rows"], 60)
+        self.assertEqual(report["current_rows"], 3)
+        self.assertTrue(report["drift_detected"])
+        self.assertEqual(set(report["features"]), {"measurement", "group"})
+        self.assertTrue(report["features"]["measurement"]["drift_detected"])
+        self.assertEqual(
+            report["features"]["group"]["method"],
+            "population_stability_index_categorical",
+        )
+
+    def test_monitor_drift_rejects_missing_feature(self):
+        current_path = self.directory / "missing-feature.csv"
+        pd.DataFrame([{"measurement": 5}]).to_csv(current_path, index=False)
+        with self.assertRaisesRegex(ValueError, "missing required feature columns"):
+            monitor_drift(
+                self.data_path,
+                current_path,
+                self.directory / "drift.json",
+                target="label",
+            )
+
+    def test_monitor_drift_rejects_non_numeric_current_value(self):
+        current_path = self.directory / "invalid-numeric.csv"
+        pd.DataFrame([{"measurement": "not-a-number", "group": "east"}]).to_csv(
+            current_path, index=False
+        )
+        with self.assertRaisesRegex(ValueError, "non-numeric values"):
+            monitor_drift(
+                self.data_path,
+                current_path,
+                self.directory / "drift.json",
+                target="label",
+            )
+
+    def test_mlflow_is_optional_and_reports_install_instructions(self):
+        with patch.dict(sys.modules, {"mlflow": None}):
+            with self.assertRaisesRegex(RuntimeError, "requirements-mlflow.txt"):
+                _log_mlflow_run("test", {}, {}, [])
+
+    def test_mlflow_tracking_logs_metrics_and_artifacts(self):
+        mlflow_stub = MagicMock()
+        artifact_path = self.directory / "report.json"
+        artifact_path.write_text("{}", encoding="utf-8")
+        with patch.dict(sys.modules, {"mlflow": mlflow_stub}):
+            _log_mlflow_run(
+                "test-experiment",
+                {"folds": 3, "options": {"tune": True}},
+                {"macro_f1": 0.9},
+                [artifact_path],
+            )
+
+        mlflow_stub.set_experiment.assert_called_once_with("test-experiment")
+        mlflow_stub.log_params.assert_called_once_with(
+            {"folds": "3", "options": '{"tune": true}'}
+        )
+        mlflow_stub.log_metrics.assert_called_once_with({"macro_f1": 0.9})
+        mlflow_stub.log_artifact.assert_called_once_with(str(artifact_path))
 
     def test_missing_target_column_is_reported(self):
         with self.assertRaisesRegex(ValueError, "Target column 'absent'"):
@@ -138,6 +234,17 @@ class PipelineTests(unittest.TestCase):
                 self.directory / "metrics.json",
             )
 
+    def test_training_rejects_csv_without_header(self):
+        invalid_path = self.directory / "empty.csv"
+        invalid_path.write_text("", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "must include a header row"):
+            train(
+                invalid_path,
+                "label",
+                self.directory / "model.joblib",
+                self.directory / "metrics.json",
+            )
+
     def test_prediction_api_serves_records_and_validates_schema(self):
         model_path = self.directory / "api-model.joblib"
         train(
@@ -175,6 +282,17 @@ class PipelineTests(unittest.TestCase):
                 "/predict", json={"records": [{"measurement": 5}]}
             )
             self.assertEqual(invalid_response.status_code, 422)
+            empty_records_response = client.post("/predict", json={"records": []})
+            self.assertEqual(empty_records_response.status_code, 422)
+            malformed_payload_response = client.post(
+                "/predict", json={"records": "not-a-list"}
+            )
+            self.assertEqual(malformed_payload_response.status_code, 422)
+            invalid_value_response = client.post(
+                "/predict",
+                json={"records": [{"measurement": "not-numeric", "group": "north"}]},
+            )
+            self.assertEqual(invalid_value_response.status_code, 422)
 
 
 if __name__ == "__main__":

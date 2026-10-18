@@ -86,7 +86,7 @@ with st.sidebar:
                 "model_name", type(model_bundle["model"]).__name__
             )
             st.success(f"Loaded model: {model_name}")
-        except Exception as exc:  # pragma: no cover - UI feedback only
+        except (OSError, ValueError, EOFError, KeyError) as exc:
             st.error(f"Could not load model: {exc}")
 
     if "selected_model" in st.session_state:
@@ -101,8 +101,9 @@ if "bundle" not in st.session_state:
                 else st.session_state["selected_model"]
             )
         )
-    except Exception:
+    except (OSError, ValueError, EOFError, KeyError) as exc:
         st.session_state["bundle"] = None
+        st.error(f"Could not load the default model: {exc}")
 
 bundle = st.session_state.get("bundle")
 if bundle is None:
@@ -135,9 +136,19 @@ if metrics_summary:
                     "precision": row.get("precision"),
                     "recall": row.get("recall"),
                     "f1": row.get("f1"),
+                    "cv_f1_macro": row.get("cv_f1_macro"),
                 }
             )
         st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True)
+        with st.expander("Best model class-level metrics"):
+            st.dataframe(
+                pd.DataFrame.from_dict(
+                    metrics_summary.get("best_classification_report", {}),
+                    orient="index",
+                ),
+                use_container_width=True,
+            )
+            st.json(metrics_summary.get("best_confusion_matrix", {}))
     else:
         summary = {
             key: value
@@ -181,7 +192,7 @@ if uploaded_file is not None:
             file_name="predictions.csv",
             mime="text/csv",
         )
-    except Exception as exc:  # pragma: no cover - UI feedback only
+    except (ValueError, pd.errors.ParserError, OSError) as exc:
         st.error(f"Prediction failed: {exc}")
 else:
     st.info("Choose a CSV file to generate predictions.")

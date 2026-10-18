@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
@@ -21,11 +22,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
+    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
 )
-from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.model_selection import GridSearchCV, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -160,23 +162,158 @@ def _evaluate_model(
 ) -> dict[str, Any]:
     model.fit(x_train, y_train)
     predictions = model.predict(x_test)
+    labels = pd.unique(y_test).tolist()
+    precision_macro = float(
+        precision_score(y_test, predictions, average="macro", zero_division=0)
+    )
+    recall_macro = float(
+        recall_score(y_test, predictions, average="macro", zero_division=0)
+    )
+    f1_macro = float(f1_score(y_test, predictions, average="macro", zero_division=0))
     return {
         "model_name": model_name,
         "accuracy": float(accuracy_score(y_test, predictions)),
-        "precision": float(
-            precision_score(y_test, predictions, average="macro", zero_division=0)
-        ),
-        "recall": float(
-            recall_score(y_test, predictions, average="macro", zero_division=0)
-        ),
-        "f1": float(f1_score(y_test, predictions, average="macro", zero_division=0)),
+        "precision": precision_macro,
+        "recall": recall_macro,
+        "f1": f1_macro,
+        "precision_macro": precision_macro,
+        "recall_macro": recall_macro,
+        "f1_macro": f1_macro,
         "classification_report": classification_report(
             y_test,
             predictions,
             output_dict=True,
             zero_division=0,
         ),
+        "confusion_matrix": {
+            "labels": labels,
+            "values": confusion_matrix(y_test, predictions, labels=labels).tolist(),
+        },
     }
+
+
+def _log_mlflow_run(
+    experiment_name: str,
+    parameters: dict[str, Any],
+    metrics: dict[str, Any],
+    artifact_paths: list[Path],
+) -> None:
+    try:
+        import mlflow
+    except ImportError as error:
+        raise RuntimeError(
+            "MLflow tracking requires the optional dependencies. "
+            "Install them with: python -m pip install -r requirements-mlflow.txt"
+        ) from error
+
+    mlflow.set_experiment(experiment_name)
+    with mlflow.start_run():
+        mlflow.log_params(
+            {
+                key: json.dumps(value, sort_keys=True)
+                if isinstance(value, (dict, list))
+                else str(value)
+                for key, value in parameters.items()
+                if value is not None
+            }
+        )
+        mlflow.log_metrics(
+            {key: float(value) for key, value in metrics.items() if value is not None}
+        )
+        for artifact_path in artifact_paths:
+            mlflow.log_artifact(str(artifact_path))
+
+
+def monitor_drift(
+    reference_path: Path,
+    current_path: Path,
+    report_path: Path,
+    threshold: float = 0.2,
+    target: str | None = None,
+) -> dict[str, Any]:
+    """Compare feature distributions using PSI for numeric and categorical data."""
+    if threshold <= 0:
+        raise ValueError("threshold must be greater than zero")
+
+    reference = _read_csv(reference_path)
+    current = _read_csv(current_path)
+    if target is not None:
+        if target not in reference.columns:
+            raise ValueError(
+                f"Target column '{target}' was not found in {reference_path}"
+            )
+        reference = reference.drop(columns=[target])
+        if target in current.columns:
+            current = current.drop(columns=[target])
+    feature_columns = reference.columns.tolist()
+    _validate_features(reference, feature_columns)
+    _validate_features(current, feature_columns)
+
+    feature_results: dict[str, Any] = {}
+    epsilon = 1e-6
+    for column in feature_columns:
+        if pd.api.types.is_numeric_dtype(reference[column]):
+            baseline = reference[column].dropna().to_numpy(dtype=float)
+            observed = pd.to_numeric(current[column], errors="coerce")
+            invalid_values = current[column].notna() & observed.isna()
+            if invalid_values.any():
+                raise ValueError(
+                    f"Current data contains non-numeric values for feature '{column}'"
+                )
+            observed_values = observed.dropna().to_numpy(dtype=float)
+            quantiles = np.quantile(baseline, np.linspace(0, 1, 11))
+            edges = np.unique(np.concatenate(([-np.inf], quantiles, [np.inf])))
+            reference_counts = np.histogram(baseline, bins=edges)[0].astype(float)
+            current_counts = np.histogram(observed_values, bins=edges)[0].astype(float)
+            method = "population_stability_index_numeric"
+        else:
+            reference_values = reference[column].astype("string").fillna("<MISSING>")
+            current_values = current[column].astype("string").fillna("<MISSING>")
+            categories = sorted(
+                set(reference_values.tolist()) | set(current_values.tolist())
+            )
+            reference_counts = (
+                reference_values.value_counts(normalize=False)
+                .reindex(categories, fill_value=0)
+                .to_numpy(dtype=float)
+            )
+            current_counts = (
+                current_values.value_counts(normalize=False)
+                .reindex(categories, fill_value=0)
+                .to_numpy(dtype=float)
+            )
+            method = "population_stability_index_categorical"
+
+        reference_distribution = (reference_counts + epsilon) / (
+            reference_counts.sum() + epsilon * len(reference_counts)
+        )
+        current_distribution = (current_counts + epsilon) / (
+            current_counts.sum() + epsilon * len(current_counts)
+        )
+        score = float(
+            np.sum(
+                (current_distribution - reference_distribution)
+                * np.log(current_distribution / reference_distribution)
+            )
+        )
+        feature_results[column] = {
+            "method": method,
+            "score": score,
+            "drift_detected": score >= threshold,
+        }
+
+    report = {
+        "reference_rows": len(reference),
+        "current_rows": len(current),
+        "threshold": threshold,
+        "features": feature_results,
+        "drift_detected": any(
+            result["drift_detected"] for result in feature_results.values()
+        ),
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
 
 
 def compare_models(
@@ -189,6 +326,7 @@ def compare_models(
     experiments_path: Path | None = Path("artifacts/experiments.jsonl"),
     experiment_name: str = "classification-comparison",
     version: str | None = None,
+    mlflow_tracking: bool = False,
 ) -> dict[str, Any]:
     """Train a small set of candidate models and save the best performer."""
     if not 0 < test_size < 1:
@@ -245,13 +383,30 @@ def compare_models(
             ]
         ),
     }
-    evaluations: list[dict[str, Any]] = []
-    for model_name, model in candidate_models.items():
-        evaluations.append(
-            _evaluate_model(model, x_train, x_test, y_train, y_test, model_name)
+    effective_cv = min(5, int(y_train.value_counts().min()))
+    if effective_cv < 2:
+        raise ValueError(
+            "Model comparison needs at least two training rows for every class"
         )
 
-    best_model = max(evaluations, key=lambda result: result["f1"])
+    evaluations: list[dict[str, Any]] = []
+    for model_name, model in candidate_models.items():
+        cv_scores = cross_val_score(
+            model,
+            x_train,
+            y_train,
+            scoring="f1_macro",
+            cv=effective_cv,
+            n_jobs=1,
+        )
+        evaluations.append(
+            {
+                **_evaluate_model(model, x_train, x_test, y_train, y_test, model_name),
+                "cv_f1_macro": float(cv_scores.mean()),
+            }
+        )
+
+    best_model = max(evaluations, key=lambda result: result["cv_f1_macro"])
     selected_model = candidate_models[best_model["model_name"]]
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     resolved_version = version or _create_model_version("comparison")
@@ -270,7 +425,14 @@ def compare_models(
     metrics_payload = {
         "best_model": best_model["model_name"],
         "best_accuracy": best_model["accuracy"],
-        "best_f1": best_model["f1"],
+        "best_precision_macro": best_model["precision_macro"],
+        "best_recall_macro": best_model["recall_macro"],
+        "best_f1": best_model["f1_macro"],
+        "best_cv_f1_macro": best_model["cv_f1_macro"],
+        "best_classification_report": best_model["classification_report"],
+        "best_confusion_matrix": best_model["confusion_matrix"],
+        "selection_metric": "cv_f1_macro",
+        "selection_cv_folds": effective_cv,
         "comparison": evaluations,
         "target": target,
         "features": features.columns.tolist(),
@@ -304,6 +466,31 @@ def compare_models(
         experiments_path.parent.mkdir(parents=True, exist_ok=True)
         with experiments_path.open("a", encoding="utf-8") as log:
             log.write(json.dumps(run) + "\n")
+    if mlflow_tracking:
+        mlflow_metrics = {}
+        for evaluation in evaluations:
+            model_name = evaluation["model_name"]
+            for metric_name in (
+                "accuracy",
+                "precision_macro",
+                "recall_macro",
+                "f1_macro",
+                "cv_f1_macro",
+            ):
+                mlflow_metrics[f"{model_name}_{metric_name}"] = evaluation[metric_name]
+        _log_mlflow_run(
+            experiment_name,
+            {
+                "target": target,
+                "test_size": test_size,
+                "random_state": random_state,
+                "dataset_sha256": artifact_bundle["dataset_sha256"],
+                "selected_model": best_model["model_name"],
+                "model_version": resolved_version,
+            },
+            mlflow_metrics,
+            [model_path, metrics_path],
+        )
     return metrics_payload
 
 
@@ -319,6 +506,7 @@ def train(
     experiments_path: Path | None = Path("artifacts/experiments.jsonl"),
     experiment_name: str = "classification",
     version: str | None = None,
+    mlflow_tracking: bool = False,
 ) -> dict[str, Any]:
     """Validate, tune, evaluate, and persist a classification pipeline."""
     if not 0 < test_size < 1:
@@ -383,9 +571,25 @@ def train(
     else:
         model.fit(x_train, y_train)
     predictions = model.predict(x_test)
+    evaluation_labels = pd.unique(y_test).tolist()
 
     metrics: dict[str, Any] = {
         "accuracy": float(accuracy_score(y_test, predictions)),
+        "precision_macro": float(
+            precision_score(y_test, predictions, average="macro", zero_division=0)
+        ),
+        "recall_macro": float(
+            recall_score(y_test, predictions, average="macro", zero_division=0)
+        ),
+        "f1_macro": float(
+            f1_score(y_test, predictions, average="macro", zero_division=0)
+        ),
+        "confusion_matrix": {
+            "labels": evaluation_labels,
+            "values": confusion_matrix(
+                y_test, predictions, labels=evaluation_labels
+            ).tolist(),
+        },
         "classification_report": classification_report(
             y_test,
             predictions,
@@ -443,6 +647,28 @@ def train(
         experiments_path.parent.mkdir(parents=True, exist_ok=True)
         with experiments_path.open("a", encoding="utf-8") as log:
             log.write(json.dumps(run) + "\n")
+    if mlflow_tracking:
+        _log_mlflow_run(
+            experiment_name,
+            {
+                "target": target,
+                "test_size": test_size,
+                "random_state": random_state,
+                "tuning_enabled": tune,
+                "cv_folds": effective_cv if tune else None,
+                "dataset_sha256": artifact_bundle["dataset_sha256"],
+                "model_version": resolved_version,
+                **best_params,
+            },
+            {
+                "accuracy": metrics["accuracy"],
+                "precision_macro": metrics["precision_macro"],
+                "recall_macro": metrics["recall_macro"],
+                "f1_macro": metrics["f1_macro"],
+                "cv_accuracy": cv_accuracy,
+            },
+            [model_path, metrics_path],
+        )
     return metrics
 
 
@@ -498,6 +724,11 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="optional model version label; also saves a versioned artifact copy",
     )
+    train_parser.add_argument(
+        "--mlflow",
+        action="store_true",
+        help="log parameters, metrics, and model artifacts to MLflow",
+    )
 
     compare_parser = commands.add_parser(
         "compare",
@@ -534,6 +765,31 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="optional model version label; also saves a versioned artifact copy",
     )
+    compare_parser.add_argument(
+        "--mlflow",
+        action="store_true",
+        help="log candidate metrics and artifacts to MLflow",
+    )
+
+    monitor_parser = commands.add_parser(
+        "monitor",
+        help="compare reference and current feature distributions for drift",
+    )
+    monitor_parser.add_argument(
+        "--reference", type=Path, required=True, help="baseline feature CSV"
+    )
+    monitor_parser.add_argument(
+        "--current", type=Path, required=True, help="new feature CSV to monitor"
+    )
+    monitor_parser.add_argument(
+        "--report", type=Path, default=Path("artifacts/drift_report.json")
+    )
+    monitor_parser.add_argument("--threshold", type=float, default=0.2)
+    monitor_parser.add_argument(
+        "--target",
+        default=None,
+        help="optional target column in the reference data to exclude from monitoring",
+    )
 
     predict_parser = commands.add_parser(
         "predict", help="generate predictions with a saved model"
@@ -559,6 +815,7 @@ def main() -> None:
             None if args.no_experiment_log else args.experiments,
             args.experiment_name,
             args.version,
+            args.mlflow,
         )
         print(f"Model saved to {args.model}")
         if args.version:
@@ -576,6 +833,7 @@ def main() -> None:
             None if args.no_experiment_log else args.experiments,
             args.experiment_name,
             args.version,
+            args.mlflow,
         )
         print(f"Best model saved to {args.model}: {metrics['best_model']}")
         if args.version:
@@ -585,6 +843,20 @@ def main() -> None:
     elif args.command == "predict":
         result = predict(args.model, args.data, args.output)
         print(f"Wrote {len(result)} predictions to {args.output}")
+    elif args.command == "monitor":
+        report = monitor_drift(
+            args.reference,
+            args.current,
+            args.report,
+            args.threshold,
+            args.target,
+        )
+        print(f"Drift report saved to {args.report}")
+        print(
+            f"Drift detected: {report['drift_detected']} "
+            f"({sum(item['drift_detected'] for item in report['features'].values())} "
+            f"features over threshold)"
+        )
 
 
 if __name__ == "__main__":
