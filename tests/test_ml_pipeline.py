@@ -54,6 +54,8 @@ class PipelineTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["accuracy"], 0)
         self.assertEqual(metrics["features"], ["measurement", "group"])
         self.assertGreaterEqual(metrics["cv_folds"], 2)
+        self.assertEqual(metrics["cv_repeats"], 3)
+        self.assertIsNotNone(metrics["cv_accuracy_std"])
         self.assertIn("classifier__C", metrics["best_params"])
         self.assertIn("confusion_matrix", metrics)
         self.assertEqual(set(metrics["confusion_matrix"]["labels"]), {"low", "high"})
@@ -102,10 +104,12 @@ class PipelineTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["best_f1"], 0.0)
         self.assertEqual(metrics["selection_metric"], "cv_f1_macro")
         self.assertGreaterEqual(metrics["selection_cv_folds"], 2)
+        self.assertEqual(metrics["selection_cv_repeats"], 3)
         self.assertIn("best_confusion_matrix", metrics)
         self.assertIn("best_classification_report", metrics)
         for candidate in metrics["comparison"]:
             self.assertIn("cv_f1_macro", candidate)
+            self.assertGreaterEqual(candidate["cv_f1_macro_std"], 0.0)
             self.assertEqual(
                 set(candidate["confusion_matrix"]["labels"]), {"low", "high"}
             )

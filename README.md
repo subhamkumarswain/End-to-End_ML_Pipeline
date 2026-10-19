@@ -46,8 +46,9 @@ Numeric features are median-imputed and scaled; categorical features are
 imputed and one-hot encoded. Completely empty feature columns and missing
 targets are rejected. The default split is 80% training and 20% stratified
 holdout data. By default, the pipeline searches logistic-regression `C` values
-using stratified cross-validation on the training split; the holdout split is
-not used for tuning.
+using stratified cross-validation on the training split, repeated three times;
+the report includes the mean score and standard deviation across folds. The
+holdout split is not used for tuning.
 
 ```powershell
 python ml_pipeline.py train --data .\data\train.csv --target passed
@@ -85,9 +86,13 @@ python ml_pipeline.py compare `
 ```
 
 The comparison selects the model using training-only stratified cross-validation
-macro F1, then reports holdout accuracy, macro precision/recall/F1, per-class
+macro F1 repeated three times. It reports the mean and fold-to-fold standard
+deviation, along with holdout accuracy, macro precision/recall/F1, per-class
 metrics, and confusion matrices. This avoids choosing a model based on its
-holdout results. It keeps the highest cross-validation macro-F1 model.
+holdout results and gives a clearer sense of how scores vary across folds. It
+keeps the highest mean cross-validation macro-F1 model. Repeated validation
+gives a more stable estimate, but cannot compensate for a small or
+unrepresentative dataset.
 When a version is supplied, it also saves a versioned artifact copy such as
 `best_model-v1.joblib`, while preserving the latest model at the regular path.
 
@@ -151,8 +156,11 @@ The metrics JSON is an evaluation report, not a prediction file:
 - **Precision** reflects how often predictions for a class were correct.
 - **Recall** reflects how many actual examples of a class were found.
 - **F1** combines precision and recall. Macro scores average across classes.
-- **Cross-validation** repeats evaluation on training-data folds; it helps
-  compare or tune models without using the held-out test rows.
+- **Cross-validation** evaluates on multiple stratified training-data folds.
+  This pipeline repeats the folds three times when tuning or comparing models.
+  The report's `cv_accuracy_std` or `cv_f1_macro_std` shows how much scores
+  vary across folds; a larger value means less consistent results. Held-out
+  test rows are not used for cross-validation.
 
 The committed demonstration report shows 100% accuracy on just six held-out
 rows. That is a tiny sample and should not be interpreted as a reliable estimate

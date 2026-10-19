@@ -163,7 +163,8 @@ if metrics_summary:
                     ),
                     "Macro F1": f"{row.get('f1_macro', row.get('f1', 0)):.0%}",
                     "Cross-validation F1": (
-                        f"{row['cv_f1_macro']:.0%}"
+                        f"{row['cv_f1_macro']:.0%} ± "
+                        f"{row.get('cv_f1_macro_std', 0):.0%}"
                         if row.get("cv_f1_macro") is not None
                         else "Not available"
                     ),
@@ -173,7 +174,8 @@ if metrics_summary:
         st.caption(
             "Accuracy is the share of test rows predicted correctly. Macro precision, "
             "recall, and F1 average the score across classes. Cross-validation F1 "
-            "summarizes training-only validation and was used to select the model."
+            "shows the mean ± standard deviation across repeated training folds; "
+            "it was used to select the model."
         )
         with st.expander("Best model class-level metrics"):
             st.dataframe(
@@ -228,9 +230,14 @@ if metrics_summary:
             "performance across the predicted classes."
         )
         if metrics_summary.get("cv_accuracy") is not None:
+            cv_std = metrics_summary.get("cv_accuracy_std")
+            variability = f" ± {cv_std:.0%}" if cv_std is not None else ""
+            repeats = metrics_summary.get("cv_repeats")
+            repeat_text = f" across {repeats} repeats" if repeats is not None else ""
             st.caption(
-                f"Cross-validation accuracy during training: "
-                f"{metrics_summary['cv_accuracy']:.0%}."
+                f"Training cross-validation accuracy: "
+                f"{metrics_summary['cv_accuracy']:.0%}{variability}"
+                f"{repeat_text}. The ± value is the standard deviation across folds."
             )
     else:
         st.info("No familiar evaluation metrics were found for this model.")

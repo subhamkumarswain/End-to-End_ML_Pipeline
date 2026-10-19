@@ -27,9 +27,16 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from sklearn.model_selection import GridSearchCV, cross_val_score, train_test_split
+from sklearn.model_selection import (
+    GridSearchCV,
+    RepeatedStratifiedKFold,
+    cross_val_score,
+    train_test_split,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+CV_REPEATS = 3
 
 
 def _read_csv(csv_path: Path) -> pd.DataFrame:
@@ -388,6 +395,11 @@ def compare_models(
         raise ValueError(
             "Model comparison needs at least two training rows for every class"
         )
+    cv_strategy = RepeatedStratifiedKFold(
+        n_splits=effective_cv,
+        n_repeats=CV_REPEATS,
+        random_state=random_state,
+    )
 
     evaluations: list[dict[str, Any]] = []
     for model_name, model in candidate_models.items():
@@ -396,13 +408,14 @@ def compare_models(
             x_train,
             y_train,
             scoring="f1_macro",
-            cv=effective_cv,
+            cv=cv_strategy,
             n_jobs=1,
         )
         evaluations.append(
             {
                 **_evaluate_model(model, x_train, x_test, y_train, y_test, model_name),
                 "cv_f1_macro": float(cv_scores.mean()),
+                "cv_f1_macro_std": float(cv_scores.std()),
             }
         )
 
@@ -433,6 +446,7 @@ def compare_models(
         "best_confusion_matrix": best_model["confusion_matrix"],
         "selection_metric": "cv_f1_macro",
         "selection_cv_folds": effective_cv,
+        "selection_cv_repeats": CV_REPEATS,
         "comparison": evaluations,
         "target": target,
         "features": features.columns.tolist(),
@@ -453,11 +467,15 @@ def compare_models(
                 "target": target,
                 "test_size": test_size,
                 "random_state": random_state,
+                "cv_folds": effective_cv,
+                "cv_repeats": CV_REPEATS,
             },
             "metrics": {
                 "best_model": best_model["model_name"],
                 "best_accuracy": best_model["accuracy"],
                 "best_f1": best_model["f1"],
+                "best_cv_f1_macro": best_model["cv_f1_macro"],
+                "best_cv_f1_macro_std": best_model["cv_f1_macro_std"],
             },
             "model_path": str(model_path),
             "model_version": resolved_version,
@@ -476,6 +494,7 @@ def compare_models(
                 "recall_macro",
                 "f1_macro",
                 "cv_f1_macro",
+                "cv_f1_macro_std",
             ):
                 mlflow_metrics[f"{model_name}_{metric_name}"] = evaluation[metric_name]
         _log_mlflow_run(
@@ -484,6 +503,8 @@ def compare_models(
                 "target": target,
                 "test_size": test_size,
                 "random_state": random_state,
+                "cv_folds": effective_cv,
+                "cv_repeats": CV_REPEATS,
                 "dataset_sha256": artifact_bundle["dataset_sha256"],
                 "selected_model": best_model["model_name"],
                 "model_version": resolved_version,
@@ -555,12 +576,19 @@ def train(
         )
     best_params: dict[str, Any] = {}
     cv_accuracy: float | None = None
+    cv_accuracy_std: float | None = None
+    cv_repeats: int | None = None
     if tune:
+        cv_strategy = RepeatedStratifiedKFold(
+            n_splits=effective_cv,
+            n_repeats=CV_REPEATS,
+            random_state=random_state,
+        )
         search = GridSearchCV(
             model,
             param_grid={"classifier__C": [0.1, 1.0, 10.0]},
             scoring="accuracy",
-            cv=effective_cv,
+            cv=cv_strategy,
             n_jobs=1,
             refit=True,
         )
@@ -568,6 +596,10 @@ def train(
         model = search.best_estimator_
         best_params = search.best_params_
         cv_accuracy = float(search.best_score_)
+        cv_accuracy_std = float(
+            search.cv_results_["std_test_score"][search.best_index_]
+        )
+        cv_repeats = CV_REPEATS
     else:
         model.fit(x_train, y_train)
     predictions = model.predict(x_test)
@@ -602,7 +634,9 @@ def train(
         "random_state": random_state,
         "tuning_enabled": tune,
         "cv_folds": effective_cv if tune else None,
+        "cv_repeats": cv_repeats,
         "cv_accuracy": cv_accuracy,
+        "cv_accuracy_std": cv_accuracy_std,
         "best_params": best_params,
     }
 
@@ -634,11 +668,13 @@ def train(
                 "random_state": random_state,
                 "tuning_enabled": tune,
                 "cv_folds": effective_cv if tune else None,
+                "cv_repeats": cv_repeats,
                 **best_params,
             },
             "metrics": {
                 "accuracy": metrics["accuracy"],
                 "cv_accuracy": cv_accuracy,
+                "cv_accuracy_std": cv_accuracy_std,
             },
             "model_path": str(model_path),
             "model_version": resolved_version,
@@ -656,6 +692,7 @@ def train(
                 "random_state": random_state,
                 "tuning_enabled": tune,
                 "cv_folds": effective_cv if tune else None,
+                "cv_repeats": cv_repeats,
                 "dataset_sha256": artifact_bundle["dataset_sha256"],
                 "model_version": resolved_version,
                 **best_params,
@@ -666,6 +703,7 @@ def train(
                 "recall_macro": metrics["recall_macro"],
                 "f1_macro": metrics["f1_macro"],
                 "cv_accuracy": cv_accuracy,
+                "cv_accuracy_std": cv_accuracy_std,
             },
             [model_path, metrics_path],
         )
