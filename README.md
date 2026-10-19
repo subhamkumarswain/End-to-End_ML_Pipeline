@@ -138,6 +138,27 @@ python ml_pipeline.py predict `
   --output .\artifacts\predictions.csv
 ```
 
+For the included example, `data\predict.csv` has three rows. The saved example
+model predicts `no`, `yes`, and `yes`, respectively. Your predictions appear in
+the new `prediction` column; the model does not add the actual outcome or change
+the source file.
+
+### Understanding the scores
+
+The metrics JSON is an evaluation report, not a prediction file:
+
+- **Accuracy** is the fraction of held-out test rows predicted correctly.
+- **Precision** reflects how often predictions for a class were correct.
+- **Recall** reflects how many actual examples of a class were found.
+- **F1** combines precision and recall. Macro scores average across classes.
+- **Cross-validation** repeats evaluation on training-data folds; it helps
+  compare or tune models without using the held-out test rows.
+
+The committed demonstration report shows 100% accuracy on just six held-out
+rows. That is a tiny sample and should not be interpreted as a reliable estimate
+of real-world performance. Use a larger, representative dataset and evaluate
+with data that reflects how the model will actually be used.
+
 Only load model artifacts from trusted sources: joblib artifacts use Python
 pickle serialization and can execute code when loaded.
 
@@ -196,8 +217,17 @@ Run the dashboard for an interactive CSV upload and prediction UI:
 python -m streamlit run streamlit_app.py
 ```
 
-The dashboard loads a saved model, shows metadata, and lets you upload a CSV to
-preview predictions and download the results.
+The dashboard explains which value the model predicts and lists the required
+input columns. Use **Download an empty CSV template** for a file with the right
+column names, then add one case per row and upload it. The results table shows
+the input data with a `prediction` column, and can be downloaded as a CSV.
+
+If the model supports it, the results also show a `confidence` score. This is
+the model's score for its selected prediction—not a guarantee or necessarily a
+calibrated probability. The dashboard displays evaluation scores when a metrics
+report is available beside the model; these scores describe earlier test data,
+not a promise about future predictions. Expand **Technical model details** or
+the class-level metrics section for additional information.
 
 ### Publish a live demo
 
